@@ -1,0 +1,157 @@
+{% load i18n %}
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% trans "CIPRB M&E Dashboard" %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' }
+    </script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+
+    <header class="bg-gray-800 p-4 flex justify-between items-center shadow-lg">
+        <h1 class="text-2xl font-bold text-emerald-500">{% trans "CIPRB Real-time M&E Dashboard" %}</h1>
+        <div class="flex gap-2">
+            <span class="text-sm text-gray-400">En | Bn</span>
+        </div>
+    </header>
+
+    <main class="p-6">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+
+            <!-- Fistula Progress Ring -->
+            <div class="bg-gray-800 p-6 rounded-xl shadow-md flex flex-col items-center border border-gray-700">
+                <h2 class="text-lg font-semibold mb-4 text-emerald-500">{% trans "Fistula Surgery Targets" %}</h2>
+                <div class="relative w-40 h-40">
+                    <canvas id="fistulaProgressRing"></canvas>
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <span class="text-2xl font-bold">{{ fistula_progress|floatformat:1 }}%</span>
+                    </div>
+                </div>
+                <p class="mt-4 text-sm text-gray-400">Goal: {{ fistula_goal }} | Operated: {{ fistula_operated }}</p>
+            </div>
+
+            <!-- MPDSR Bar Chart -->
+            <div class="bg-gray-800 p-6 rounded-xl shadow-md border border-gray-700">
+                <h2 class="text-lg font-semibold mb-4 text-amber-500">{% trans "MPDSR Deaths by District" %}</h2>
+                <canvas id="mpdsrHeatmap"></canvas>
+            </div>
+
+            <!-- AI Newsletter -->
+            <div class="bg-gray-800 p-6 rounded-xl shadow-md border border-gray-700 flex flex-col items-center justify-center">
+                <h2 class="text-lg font-semibold mb-4 text-blue-500">{% trans "AI Newsletter" %}</h2>
+                <a href="{% url 'generate_newsletter' %}" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded transition">{% trans "Generate Now" %}</a>
+                <div class="mt-4 flex gap-2">
+                    <a href="{% url 'export_pdf' %}" class="bg-gray-600 hover:bg-gray-500 text-white text-sm py-1 px-3 rounded transition">PDF</a>
+                    <a href="{% url 'export_ppt' %}" class="bg-gray-600 hover:bg-gray-500 text-white text-sm py-1 px-3 rounded transition">PPT</a>
+                </div>
+            </div>
+
+            <!-- Data-to-Action Gauge -->
+            <div class="bg-gray-800 p-6 rounded-xl shadow-md border border-gray-700">
+                <h2 class="text-lg font-semibold mb-4 text-rose-500">{% trans "Data-to-Action Gap" %}</h2>
+                <div class="relative w-full h-32 flex items-center justify-center">
+                    <canvas id="actionGapGauge"></canvas>
+                </div>
+                <p class="mt-4 text-center text-sm text-gray-400">{{ action_gap_percent|floatformat:1 }}% Implemented</p>
+            </div>
+
+        </div>
+
+        <!-- MPDSR Table -->
+        <div class="bg-gray-800 p-6 rounded-xl shadow-md border border-gray-700">
+            <h2 class="text-xl font-bold mb-4 text-gray-100">{% trans "MPDSR Action Tracking" %}</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-gray-700 text-gray-300">
+                            <th class="p-3 border-b border-gray-600">Event ID</th>
+                            <th class="p-3 border-b border-gray-600">District</th>
+                            <th class="p-3 border-b border-gray-600">Facility</th>
+                            <th class="p-3 border-b border-gray-600">Recommended Action</th>
+                            <th class="p-3 border-b border-gray-600">Action Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for event in mpdsr_events %}
+                        <tr class="border-b border-gray-700 hover:bg-gray-700">
+                            <td class="p-3 text-sm font-mono">{{ event.event_id|stringformat:"s"|truncatechars:10 }}</td>
+                            <td class="p-3 text-sm">{{ event.district }}</td>
+                            <td class="p-3 text-sm">{{ event.facility_name }}</td>
+                            <td class="p-3 text-sm">{{ event.recommended_action|truncatechars:30 }}</td>
+                            <td class="p-3" id="status-cell-{{ event.event_id }}">
+                                {% include "dashboard/partials/status_dropdown.html" with event=event %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="p-4 text-center text-gray-500">No events found. Submit data via KoboToolbox webhook.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        Chart.defaults.color = '#9ca3af';
+
+        // Fistula Progress Ring
+        new Chart(document.getElementById('fistulaProgressRing').getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                datasets: [{
+                    data: [{{ fistula_operated }}, {{ fistula_goal }} - {{ fistula_operated }}],
+                    backgroundColor: ['#10b981', '#374151'],
+                    borderWidth: 0,
+                    cutout: '80%'
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { tooltip: { enabled: false } } }
+        });
+
+        // MPDSR Bar Chart - labels now proper JSON from view
+        new Chart(document.getElementById('mpdsrHeatmap').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: {{ heatmap_labels|safe }},
+                datasets: [{
+                    label: 'Deaths',
+                    data: {{ heatmap_data|safe }},
+                    backgroundColor: '#f59e0b',
+                    borderRadius: 4,
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: { beginAtZero: true, grid: { color: '#374151' } },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+
+        // Action Gap Gauge
+        new Chart(document.getElementById('actionGapGauge').getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                datasets: [{
+                    data: [{{ action_gap_percent }}, 100 - {{ action_gap_percent }}],
+                    backgroundColor: ['#f43f5e', '#374151'],
+                    borderWidth: 0,
+                    circumference: 180,
+                    rotation: 270,
+                    cutout: '80%'
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { tooltip: { enabled: false } } }
+        });
+    </script>
+</body>
+</html>
